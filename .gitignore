@@ -1,0 +1,19 @@
+# Virtual environment and caches
+.venv*/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Secrets and encryption keys: never commit these
+.env
+.env.*
+*.key
+*.pem
+
+# Models are downloaded by src/download_models.py
+models/
+
+# Datasets, enrolled templates, logs and captures are personal or large: never commit them
+data/
+captures/
+*.enc
