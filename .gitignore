@@ -1,4 +1,4 @@
-# Virtual environment and caches
+# Virtual environments and caches
 .venv*/
 __pycache__/
 *.pyc
@@ -7,6 +7,7 @@ __pycache__/
 # Secrets and encryption keys: never commit these
 .env
 .env.*
+!.env.example
 *.key
 *.pem
 

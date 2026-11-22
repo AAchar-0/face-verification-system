@@ -1,0 +1,40 @@
+{
+  "target_far": 0.001,
+  "cross_validated_far_0.01": {
+    "far_mean": 0.010223391543247104,
+    "far_sd": 0.00674939456610294,
+    "frr_mean": 0.012258585308218748,
+    "frr_sd": 0.006489775088694824
+  },
+  "cross_validated_far_0.001": {
+    "far_mean": 0.0010078793719176917,
+    "far_sd": 0.0022626182332997017,
+    "frr_mean": 0.0180511429665784,
+    "frr_sd": 0.01102602614136873
+  },
+  "metric": "cosine similarity",
+  "model": "face_recognition_sface_2021dec",
+  "dataset": "LFW, standard 10-fold pairs",
+  "pairs_scored": 5885,
+  "pairs_skipped": 115,
+  "photos_without_face": 70,
+  "photos_total": 7701,
+  "equal_error_rate": 0.011554803342548377,
+  "eer_threshold": 0.2898926935022113,
+  "threshold": 0.3591564230867716,
+  "pooled_far": 0.0006793478260869565,
+  "pooled_far_95_range": [
+    0.00018631755025851505,
+    0.0024737982442943536
+  ],
+  "pooled_frr": 0.019041142468548114,
+  "pooled_frr_95_range": [
+    0.014692599622740802,
+    0.024644524655862164
+  ],
+  "accuracy_cross_validated": {
+    "mean": 0.9909719515161763,
+    "sd": 0.004821111514782434
+  },
+  "generated": "2026-11-22T19:58:20+00:00"
+}
