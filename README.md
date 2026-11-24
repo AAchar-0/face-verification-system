@@ -2,7 +2,9 @@
 
 > A Python and OpenCV project that checks whether a person is who they claim to be (one-to-one verification), built around explicit consent, no stored photos, encrypted templates that expire, a session-only mode, and honestly reported accuracy.
 
-**Status:** In progress. Enrollment, verification, encrypted storage and the session-only demo are built. Accuracy results on the benchmark are next.
+**Status:** Built and tested. Accuracy is measured on the LFW benchmark (below). A small test with consenting volunteers is planned.
+
+![The live camera window after a successful verification](docs/screenshots/demo-verified.png)
 
 ## What it is, and what it is not
 
@@ -35,7 +37,7 @@ python src/app.py delete anade       # remove a template
 python src/app.py purge              # remove every expired template
 ```
 
-The preview window stays on the local screen and nothing from it is recorded. Press `q` in it to cancel.
+The preview window stays on the local screen and nothing from it is recorded. In the demo the camera window is the control panel: press `V` (or Enter or Space) to verify and `Q` (or Esc) to quit. The camera is switched on only after consent has been given.
 
 **Session-only mode shows this notice before the camera opens:**
 
@@ -63,7 +65,27 @@ python src/download_lfw.py        # downloads and verifies the benchmark
 python src/02_evaluate_lfw.py     # scores the pairs, writes reports/ (anonymous totals and charts)
 ```
 
-**Results:** to be added once the evaluation has been run.
+### Results
+
+Run on the standard LFW protocol: 6,000 photo pairs (3,000 same person, 3,000 different people) from 7,701 photos.
+
+| Measure | Result |
+|---|---|
+| Accuracy (threshold chosen on 9 folds, measured on the 10th) | **99.10%** (± 0.48%) |
+| Equal error rate (EER) | **1.16%** |
+| Deployed threshold (cosine similarity) | 0.359, chosen so at most 0.1% of different-person pairs are accepted |
+| False accept rate (FAR) at that threshold | **0.068%** (2 of 2,944 pairs; 95% range 0.019% to 0.247%) |
+| False reject rate (FRR) at that threshold | **1.90%** (56 of 2,941 pairs; 95% range 1.47% to 2.46%) |
+| Held-out, target FAR 1% | FAR 1.02% (± 0.68%), FRR 1.23% (± 0.65%) |
+| Held-out, target FAR 0.1% | FAR 0.10% (± 0.23%), FRR 1.81% (± 1.10%) |
+
+**Detection failures are counted honestly.** No face was found in 70 of 7,701 photos (0.9%), so 115 of the 6,000 pairs could not be scored (59 same-person, 56 different-person). The figures above cover the 5,885 scored pairs. A same-person pair with no detectable face can never be verified, so counting those as rejections, the end-to-end false reject rate is **3.83%** (115 of 3,000). The false accept rate is unaffected, because a pair with no face cannot be falsely accepted.
+
+**How to read these numbers.** With 2,944 different-person pairs, the smallest measurable false accept rate is about 0.034%, and the observed 2 false accepts give a wide range. These are results on one public benchmark. They do not show how the system behaves for every group of people, and they do not show resistance to spoofing.
+
+| Score distributions | ROC curve |
+|---|---|
+| ![Histogram of similarity scores for same-person and different-person pairs](reports/score_distributions.png) | ![ROC curve: true accept rate against false accept rate](reports/roc_curve.png) |
 
 Huang, G. B., Ramesh, M., Berg, T., & Learned-Miller, E. (2007). *Labeled Faces in the Wild: A Database for Studying Face Recognition in Unconstrained Environments.* University of Massachusetts, Amherst, Technical Report 07-49.
 
@@ -88,10 +110,10 @@ This is a technical demonstration, not legal advice. Anyone deploying face verif
 - [x] Project setup, licence and environment check
 - [x] Encrypted template storage with expiry and deletion (covered by automated tests)
 - [x] Consent step and session-only mode (covered by automated tests)
-- [ ] Live camera enrollment and verification, tested on real faces
-- [ ] Accuracy evaluation on LFW
+- [x] Live camera enrollment and verification, tested on the author's face
+- [x] Accuracy evaluation on LFW
+- [x] Technical reference
 - [ ] Small consented test with volunteers (consent form in `docs/`)
-- [ ] Technical reference and final write-up
 - [ ] Stretch: a simple liveness challenge, and an in-browser demo that never uploads an image
 
 ## Quick start
@@ -108,6 +130,7 @@ python src/app.py demo
 
 ## Documentation
 
+- [Technical reference](docs/technical-reference/face-verification-reference.md): design, privacy controls, evaluation method, testing and common pitfalls
 - [Glossary of abbreviations](docs/glossary.md)
 - [Volunteer consent form (template)](docs/volunteer-consent-form.md)
 

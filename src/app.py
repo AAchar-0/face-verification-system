@@ -118,15 +118,15 @@ def collect_embeddings(engine, camera, needed, *, spacing=0.4, timeout=25.0, pre
             continue
         observation = engine.observe(frame)
         problem = quality_problem(observation)
-        if preview is not None:
+        if problem is None and clock() - last_taken >= spacing:
+            embeddings.append(observation.embedding)
+            last_taken = clock()
+        if preview is not None:                      # shown after saving, so the count is up to date
             text = f"{label} {len(embeddings)}/{needed}" if problem is None else problem
             preview.show(frame, text=text, ok=(problem is None),
                          box=observation.box if observation else None)
             if preview.quit_requested:
                 raise UserQuit()
-        if problem is None and clock() - last_taken >= spacing:
-            embeddings.append(observation.embedding)
-            last_taken = clock()
     return embeddings, problem
 
 
@@ -162,18 +162,43 @@ def verify(subject, store, engine, camera, threshold, *, now, preview=None, cloc
     return decide(record.embedding, probes, threshold, min_frames=MIN_VERIFY_FRAMES)
 
 
-def hold_result(preview, camera, text, ok, seconds=1.5):
-    """Keep the result on the preview window briefly."""
+def hold_result(preview, camera, text, ok, seconds=2.0, clock=time.monotonic):
+    """Keep a message on the live window for a moment (the window must keep being refreshed)."""
     if preview is None or not preview.enabled:
         return
-    end = time.monotonic() + seconds
-    while time.monotonic() < end:
+    end = clock() + seconds
+    while clock() < end:
         preview.show(camera.read(), text=text, ok=ok)
 
 
-def run_demo(engine, camera, preview, *, input_fn=input, print_fn=print, clock=time.monotonic,
+VERIFY_KEYS = (ord("v"), 13, 32)                      # v, Enter and Space
+WINDOW_HINT = "V (or Enter) = verify    Q (or Esc) = quit"
+
+
+def wait_for_command(preview, camera, input_fn, print_fn, status="Enrolled for this session.", ok=True):
+    """Return "verify" or "quit".
+
+    With the live window open, the window itself is the control panel and it keeps refreshing, so it
+    never freezes. The last result stays on screen until the next key press. Without a window, the
+    terminal is used instead.
+    """
+    if preview is not None and preview.enabled:
+        while preview.enabled:
+            preview.show(camera.read(), text=status, ok=ok, hint=WINDOW_HINT)
+            if preview.quit_requested:
+                return "quit"
+            if preview.last_key in VERIFY_KEYS:
+                return "verify"
+    answer = input_fn("\nPress Enter to verify, or type q then Enter to quit: ").strip().lower()
+    return "quit" if answer == "q" else "verify"
+
+
+def run_demo(engine, open_camera, preview, *, input_fn=input, print_fn=print, clock=time.monotonic,
              now_fn=lambda: datetime.now(timezone.utc), threshold=DEFAULT_THRESHOLD, show_score=True) -> int:
-    """The session-only demo: enroll in memory, verify as often as wanted, then erase everything."""
+    """The session-only demo: enroll in memory, verify as often as wanted, then erase everything.
+
+    `open_camera` is a function that opens the camera. It is called only AFTER consent has been given.
+    """
     store = MemoryStore()
     try:
         print_fn(SESSION_BANNER)
@@ -183,20 +208,23 @@ def run_demo(engine, camera, preview, *, input_fn=input, print_fn=print, clock=t
             print_fn("No consent given. The camera was not used and nothing was captured.")
             return 1
         print_fn(f"\n{SESSION_REMINDER}  Look at the camera and hold still...")
-        result = enroll(name, store, engine, camera, retention_days=1, now=now_fn(), preview=preview, clock=clock)
-        if not result.ok:
-            print_fn(f"Enrollment failed: {result.message}")
-            return 1
-        print_fn(f"Enrolled '{name}' for this session only.")
-        while True:
-            answer = input_fn("\nPress Enter to verify, or type q then Enter to quit: ").strip().lower()
-            if answer == "q":
-                break
-            print_fn(SESSION_REMINDER)
-            decision = verify(name, store, engine, camera, threshold, now=now_fn(), preview=preview, clock=clock)
-            message = format_decision(name, decision, show_score, threshold)
-            print_fn(message)
-            hold_result(preview, camera, message, decision.accepted)
+        with open_camera() as camera:                # the camera is opened here, after consent
+            result = enroll(name, store, engine, camera, retention_days=1, now=now_fn(),
+                            preview=preview, clock=clock)
+            if not result.ok:
+                print_fn(f"Enrollment failed: {result.message}")
+                return 1
+            print_fn(f"Enrolled '{name}' for this session only.")
+            if preview is not None and preview.enabled:
+                print_fn("Use the camera window now: press V to verify, or Q to quit.")
+            status, ok = "Enrolled for this session.", True
+            while wait_for_command(preview, camera, input_fn, print_fn, status, ok) != "quit":
+                print_fn(SESSION_REMINDER)
+                decision = verify(name, store, engine, camera, threshold, now=now_fn(),
+                                  preview=preview, clock=clock)
+                status = format_decision(name, decision, show_score, threshold)
+                ok = decision.accepted
+                print_fn(status)
         return 0
     finally:
         store.wipe()                                 # runs even if the program is interrupted
@@ -219,8 +247,7 @@ def cmd_demo(args) -> int:
     print(f"Decision threshold {threshold:.3f}: {source}")
     engine = FaceEngine(MODELS_DIR)
     preview = Preview(enabled=not args.no_preview)
-    with Camera() as camera:
-        return run_demo(engine, camera, preview, threshold=threshold, show_score=not args.hide_score)
+    return run_demo(engine, Camera, preview, threshold=threshold, show_score=not args.hide_score)
 
 
 def cmd_enroll(args) -> int:
@@ -235,6 +262,8 @@ def cmd_enroll(args) -> int:
     with Camera() as camera:
         result = enroll(subject, store, engine, camera, retention_days=args.days,
                         now=datetime.now(timezone.utc), preview=preview)
+        if result.ok:
+            hold_result(preview, camera, "Enrolled. Thank you.", True, seconds=1.5)
     if not result.ok:
         print(f"Enrollment failed: {result.message}")
         return 1

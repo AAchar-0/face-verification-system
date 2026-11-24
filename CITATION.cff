@@ -1,0 +1,33 @@
+cff-version: 1.2.0
+message: "If you use this software, its method or its documentation, please cite it as below."
+title: "Consent-Based Face Verification System"
+type: software
+authors:
+  - family-names: "A'Acharo"
+    given-names: "Anade Archyphilus"
+repository-code: "https://github.com/AAchar-0/face-verification-system"
+license: MIT
+date-released: 2026-11-23
+abstract: "A Python and OpenCV project for one-to-one face verification built around explicit consent, no stored photos, encrypted templates that expire, a session-only mode, and honestly reported accuracy on the LFW benchmark."
+keywords:
+  - face verification
+  - biometrics
+  - privacy by design
+  - OpenCV
+  - Python
+references:
+  - type: report
+    title: "Labeled Faces in the Wild: A Database for Studying Face Recognition in Unconstrained Environments"
+    authors:
+      - family-names: "Huang"
+        given-names: "Gary B."
+      - family-names: "Ramesh"
+        given-names: "Manu"
+      - family-names: "Berg"
+        given-names: "Tamara"
+      - family-names: "Learned-Miller"
+        given-names: "Erik"
+    year: 2007
+    number: "07-49"
+    institution:
+      name: "University of Massachusetts, Amherst"

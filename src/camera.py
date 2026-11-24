@@ -41,15 +41,22 @@ class Camera:
 
 
 class Preview:
-    """A mirror-style live window with a coloured box and a status line. Disables itself if no display exists."""
+    """A mirror-style live window with a coloured box and a status line. Disables itself if no display exists.
+
+    After each show() call, last_key holds the key pressed in the window (or -1), and quit_requested
+    becomes True once q or Esc has been pressed.
+    """
 
     WINDOW = "Face verification (press q to quit)"
+    QUIT_KEYS = (ord("q"), 27)                       # q and Esc
 
     def __init__(self, enabled: bool = True):
         self.enabled = enabled
         self.quit_requested = False
+        self.last_key = -1
 
-    def show(self, frame, text: str = "", ok: bool | None = None, box=None) -> None:
+    def show(self, frame, text: str = "", ok: bool | None = None, box=None, hint: str = "") -> None:
+        self.last_key = -1
         if not self.enabled or frame is None:
             return
         colour = (0, 200, 0) if ok is True else (0, 0, 220) if ok is False else (0, 170, 255)   # BGR colours
@@ -60,9 +67,13 @@ class Preview:
             cv2.rectangle(shown, (x, y), (x + w, y + h), colour, 2)
         if text:
             cv2.putText(shown, text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, colour, 2, cv2.LINE_AA)
+        if hint:                                                       # a smaller second line, for key hints
+            cv2.putText(shown, hint, (10, 58), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
         try:
             cv2.imshow(self.WINDOW, shown)
-            if cv2.waitKey(1) & 0xFF == ord("q"):
+            key = cv2.waitKey(1) & 0xFF                                # 255 means no key was pressed
+            self.last_key = -1 if key == 255 else key
+            if self.last_key in self.QUIT_KEYS:
                 self.quit_requested = True
         except cv2.error:
             self.enabled = False                                       # no display: carry on without a preview

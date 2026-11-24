@@ -3,7 +3,7 @@
 Run it from the project root with the virtual environment active (after src/download_lfw.py):
     python src/02_evaluate_lfw.py
 
-The first run turns about 12,000 photos into embeddings (roughly 5 to 15 minutes) and saves them in
+The first run turns about 7,700 photos into embeddings (roughly 5 to 15 minutes) and saves them in
 data/processed (ignored by Git), so later runs take seconds. Only anonymous totals and charts are written
 to reports/, which is safe to publish. No LFW photo or per-person result is ever saved there.
 """
@@ -77,10 +77,10 @@ def score_pairs(pairs, embeddings):
     """Cosine similarity for every pair where both photos had a detectable face."""
     unit = {path: l2_normalize(vector) for path, vector in embeddings.items()}
     folds = [([], []) for _ in range(10)]
-    skipped = 0
+    skipped = {"same": 0, "different": 0}
     for pair in pairs:
         if pair.first not in unit or pair.second not in unit:
-            skipped += 1
+            skipped["same" if pair.same else "different"] += 1
             continue
         score = float(np.dot(unit[pair.first], unit[pair.second]))
         folds[pair.fold][0 if pair.same else 1].append(score)
@@ -133,7 +133,8 @@ def main() -> None:
 
     engine = FaceEngine(MODELS_DIR)
     embeddings, failed = embed_all(engine, relpaths)
-    folds, skipped = score_pairs(pairs, embeddings)
+    folds, skipped_by_kind = score_pairs(pairs, embeddings)
+    skipped = skipped_by_kind["same"] + skipped_by_kind["different"]
 
     same = np.concatenate([s for s, _ in folds])
     different = np.concatenate([d for _, d in folds])
@@ -149,10 +150,18 @@ def main() -> None:
     false_rejects = int(round(frr_pooled[0] * len(same)))
     frr_low, frr_high = wilson_interval(false_rejects, len(same))
 
+    # A same-person pair where no face was found can never be verified, so it is a rejection in practice.
+    # (A different-person pair with no face found cannot be falsely accepted, so FAR is unaffected.)
+    total_same = len(same) + skipped_by_kind["same"]
+    end_to_end_false_rejects = int(round(frr_pooled[0] * len(same))) + skipped_by_kind["same"]
+    end_to_end_frr = end_to_end_false_rejects / total_same
+
     print(f"\nEqual error rate (EER): {eer:.2%}  at threshold {eer_threshold:.3f}")
     print(f"Chosen threshold for a false accept rate of at most {TARGET_FAR:.1%}: {threshold:.3f}")
     print(f"   false accept rate: {far_pooled[0]:.3%}  ({false_accepts} of {len(different):,}; 95% range {far_low:.3%} to {far_high:.3%})")
     print(f"   false reject rate: {frr_pooled[0]:.2%}  ({false_rejects} of {len(same):,}; 95% range {frr_low:.2%} to {frr_high:.2%})")
+    print(f"   end-to-end false reject rate, counting same-person pairs where no face was found: "
+          f"{end_to_end_frr:.2%}  ({end_to_end_false_rejects} of {total_same:,})")
 
     report = {"target_far": TARGET_FAR}
     print("\nHeld-out results (threshold chosen on 9 folds, measured on the 10th):")
@@ -175,6 +184,8 @@ def main() -> None:
         "model": "face_recognition_sface_2021dec",
         "dataset": "LFW, standard 10-fold pairs",
         "pairs_scored": evaluated, "pairs_skipped": skipped,
+        "pairs_skipped_same": skipped_by_kind["same"], "pairs_skipped_different": skipped_by_kind["different"],
+        "end_to_end_frr": end_to_end_frr,
         "photos_without_face": len(failed), "photos_total": len(relpaths),
         "equal_error_rate": eer, "eer_threshold": eer_threshold,
         "threshold": threshold,

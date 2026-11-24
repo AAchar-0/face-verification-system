@@ -1,6 +1,7 @@
 """End-to-end tests of enrolling, verifying and the session-only demo, using fake camera and engine
 (no real face, no OpenCV model), so they run anywhere."""
 import itertools
+from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 
 import numpy as np
@@ -128,11 +129,41 @@ def test_name_prompt_repeats_until_valid():
     assert app.ask_name(input_fn=lambda _: next(answers), print_fn=lambda *_: None) == "anade"
 
 
-def run_demo_with(answers, frames, tmp_path, monkeypatch):
+class FakePreview:
+    """Stands in for the live window. In the command phase it 'presses' the scripted keys."""
+    enabled = True
+
+    def __init__(self, commands):
+        self._commands = iter(commands)
+        self.last_key, self.quit_requested, self.texts = -1, False, []
+
+    def show(self, frame, text="", ok=None, box=None, hint=""):
+        self.texts.append(text)
+        self.hints = getattr(self, "hints", []) + [hint]
+        self.last_key = next(self._commands, ord("q")) if hint else -1          # keys are pressed only in the command phase
+        if self.last_key in (ord("q"), 27):
+            self.quit_requested = True
+
+
+def camera_factory(frames, events=None):
+    def open_camera():
+        if events is not None:
+            events.append("camera opened")
+        return nullcontext(FakeCamera(frames))
+    return open_camera
+
+
+def run_demo_with(answers, frames, tmp_path, monkeypatch, preview=None, events=None):
     monkeypatch.chdir(tmp_path)
     printed = []
     supplied = iter(answers)
-    code = app.run_demo(FakeEngine(), FakeCamera(frames), None, input_fn=lambda _: next(supplied),
+
+    def input_fn(_prompt):
+        if events is not None:
+            events.append("input")
+        return next(supplied)
+
+    code = app.run_demo(FakeEngine(), camera_factory(frames, events), preview, input_fn=input_fn,
                         print_fn=printed.append, clock=Clock(), now_fn=lambda: NOW, threshold=0.5)
     return code, "\n".join(str(line) for line in printed)
 
@@ -146,11 +177,39 @@ def test_demo_shows_the_session_messages_verifies_and_writes_nothing(tmp_path, m
     assert list(tmp_path.rglob("*")) == []                # nothing at all was written to disk
 
 
-def test_demo_without_consent_never_uses_the_camera(tmp_path, monkeypatch):
-    code, output = run_demo_with(["", "anade", "no"], person_frames(PERSON_A), tmp_path, monkeypatch)
+def test_demo_without_consent_never_opens_the_camera(tmp_path, monkeypatch):
+    events = []
+    code, output = run_demo_with(["", "anade", "no"], person_frames(PERSON_A), tmp_path, monkeypatch, events=events)
     assert code == 1
+    assert "camera opened" not in events                  # the camera must stay off without consent
     assert "No consent given" in output and app.END_MESSAGE in output
     assert "Enrolled" not in output
+
+
+def test_camera_is_opened_only_after_the_consent_answer(tmp_path, monkeypatch):
+    events = []
+    run_demo_with(["", "anade", "I AGREE", "q"], person_frames(PERSON_A), tmp_path, monkeypatch, events=events)
+    assert events.index("camera opened") > 2              # after: press Enter, name, consent
+
+
+def test_window_controlled_demo_needs_no_terminal_input_after_consent(tmp_path, monkeypatch):
+    preview = FakePreview([ord("v"), 13, ord("q")])        # verify with V, verify with Enter, quit with Q
+    # Only three terminal answers exist: press Enter, name, consent. Any further input() call would fail the test.
+    code, output = run_demo_with(["", "anade", "I AGREE"], person_frames(PERSON_A), tmp_path, monkeypatch, preview=preview)
+    assert code == 0
+    assert output.count("Verified: anade") == 2
+    assert any("Verified: anade" in text for text in preview.texts)      # the result also appears in the window
+    last_prompt = [t for t, h in zip(preview.texts, preview.hints) if h][-1]
+    assert "Verified: anade" in last_prompt                              # and it stays on screen until the next key press
+    assert any(text.startswith("Enrolling: hold still 5/5") for text in preview.texts)   # the count reaches 5/5
+    assert app.END_MESSAGE in output
+    assert list(tmp_path.rglob("*")) == []
+
+
+def test_quitting_from_the_window_ends_the_session_and_erases_memory(tmp_path, monkeypatch):
+    preview = FakePreview([ord("q")])
+    code, output = run_demo_with(["", "anade", "I AGREE"], person_frames(PERSON_A), tmp_path, monkeypatch, preview=preview)
+    assert code == 0 and "Verified" not in output and app.END_MESSAGE in output
 
 
 def test_demo_erases_memory_even_when_interrupted(tmp_path, monkeypatch):
@@ -163,7 +222,7 @@ def test_demo_erases_memory_even_when_interrupted(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     printed = []
     with pytest.raises(KeyboardInterrupt):
-        app.run_demo(FakeEngine(), FakeCamera(person_frames(PERSON_A)), None, input_fn=interrupted,
+        app.run_demo(FakeEngine(), camera_factory(person_frames(PERSON_A)), None, input_fn=interrupted,
                      print_fn=printed.append, clock=Clock(), now_fn=lambda: NOW)
     assert app.END_MESSAGE in printed
 
