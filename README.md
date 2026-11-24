@@ -4,6 +4,8 @@
 
 **Status:** Built and tested. Accuracy is measured on the LFW benchmark (below). A small test with consenting volunteers is planned.
 
+**Live app:** [Try the web demo](https://face-verification-demo.streamlit.app) (session-only, adults only, nothing is saved). More of my work: [portfolio](https://aachar-0.github.io/).
+
 ![The live camera window after a successful verification](docs/screenshots/demo-verified.png)
 
 ## What it is, and what it is not
@@ -11,20 +13,20 @@
 | It is | It is not |
 |---|---|
 | One-to-one verification: "is this the person who enrolled?" | One-to-many identification: searching a crowd or database for who someone is |
-| Opt-in: nothing is captured until the person has typed an agreement | Covert, passive or automatic capture |
+| Opt-in: nothing is captured until the person has agreed (typed `I AGREE` in the command-line tool, or tapped the `I AGREE` button in the web app) | Covert, passive or automatic capture |
 | A technical demonstration with measured accuracy | A production security system or legal advice |
 
 ## Privacy and ethics by design
 
 | Principle | Implementation |
 |---|---|
-| Explicit consent first | The exact phrase `I AGREE` must be typed before the camera opens. The consent version and time are stored with the template |
+| Explicit consent first | The camera opens only after consent. In the command-line tool the exact phrase `I AGREE` must be typed. In the live web app the person types a name, reads the consent box and taps the `I AGREE` button. The consent version and time are recorded with the template (command line) or the visit (web app) |
 | Data minimisation | No photo or video is ever written to disk. Only a 128-number template is kept, built from several frames |
 | Encryption at rest | Templates are encrypted and sealed against tampering (Fernet: AES plus HMAC). The key lives in `.env`, which Git ignores |
 | Retention and deletion | Templates expire (90 days by default), expired ones are deleted on use, and `delete` removes a person's data on request |
-| Session-only mode | The `demo` command keeps everything in memory and erases it when the program ends: nothing is saved |
-| Safe test data | Only the author's own face and volunteers who consent. No faces are scraped from the web or social media |
-| No public live camera demo | A hosted camera app would collect strangers' biometric data, so the demo runs locally |
+| Session-only mode | The `demo` command keeps everything in memory and erases it when the program ends: nothing is saved. The live web app works the same way, and also has a **Delete my data** button |
+| Safe test data | Development and testing use only the author's own face and volunteers who consent. No faces are scraped from the web or social media. The live app processes only what a consenting visitor chooses to submit, and keeps none of it |
+| Live web demo, with limits | A hosted app has to receive each photo on its server to compare it, so unlike the command-line tool it is **not** local-only. The app says this in its consent box, handles photos in memory only, writes nothing to disk or a database, keeps just a 128-number template for the visit, is for adults only, and offers **Delete my data** |
 
 ## Using it
 
@@ -37,7 +39,16 @@ python src/app.py delete anade       # remove a template
 python src/app.py purge              # remove every expired template
 ```
 
-The preview window stays on the local screen and nothing from it is recorded. In the demo the camera window is the control panel: press `V` (or Enter or Space) to verify and `Q` (or Esc) to quit. The camera is switched on only after consent has been given.
+In the command-line tool the preview window stays on the local screen and nothing from it is recorded. In the demo the camera window is the control panel: press `V` (or Enter or Space) to verify and `Q` (or Esc) to quit. The camera is switched on only after consent has been given.
+
+### The live web app
+
+```powershell
+pip install streamlit
+streamlit run live_app/app.py        # opens the app in your browser
+```
+
+A visit has four screens: **welcome** (type a name, read the consent box, tap `I AGREE`), **enrol** (2 clear photos, averaged into one template), **verify** (1 more photo) and **result**. A match shows *Verified* and a **Visit website** button. A miss shows *Face not recognised* with tips and a **Try again** button. The decision threshold is fixed at **0.61** (see Results for what that means). Hosting: Streamlit Community Cloud, main file `live_app/app.py`, dependencies in `live_app/requirements.txt`.
 
 **Session-only mode shows this notice before the camera opens:**
 
@@ -50,7 +61,7 @@ The preview window stays on the local screen and nothing from it is recorded. In
 | YuNet (`face_detection_yunet_2026may.onnx`) | Face detection | MIT | `ebafce4e3c118d6554634be5c27ab333b4c047a9a8c3faf1d7cf93101c22f0f0` |
 | SFace (`face_recognition_sface_2021dec.onnx`) | Face recognition (128-number embeddings) | Apache 2.0 | `0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79` |
 
-Both come from the OpenCV Zoo. **Provenance note:** OpenCV does not document what the released SFace model was trained on. The SFace paper used large research face datasets (CASIA-WebFace, VGGFace2 and MS1M). This project cannot verify the consent status of those images, and the licence above covers the model files only.
+Both come from the OpenCV Zoo. The live app also uses Streamlit (Apache 2.0) and the headless build of OpenCV (Apache 2.0). **Provenance note:** OpenCV does not document what the released SFace model was trained on. The SFace paper used large research face datasets (CASIA-WebFace, VGGFace2 and MS1M). This project cannot verify the consent status of those images, and the licence above covers the model files only.
 
 ## Evaluation
 
@@ -83,6 +94,18 @@ Run on the standard LFW protocol: 6,000 photo pairs (3,000 same person, 3,000 di
 
 **How to read these numbers.** With 2,944 different-person pairs, the smallest measurable false accept rate is about 0.034%, and the observed 2 false accepts give a wide range. These are results on one public benchmark. They do not show how the system behaves for every group of people, and they do not show resistance to spoofing.
 
+**The live app uses a fixed threshold of 0.61.** Scored with the same LFW pairs and the project's own `error_rates` and `wilson_interval` functions:
+
+| Measure at threshold 0.61 | Result |
+|---|---|
+| False accept rate (FAR) | **0%** (0 of 2,944 different-person pairs; 95% range 0% to 0.13%) |
+| False reject rate (FRR) | **31.3%** (920 of 2,941 same-person pairs; 95% range 29.6% to 33.0%) |
+| End-to-end FRR (counting the 59 same-person pairs with no detectable face) | **32.6%** |
+
+In plain words: on this benchmark nobody was wrongly accepted, but about a third of the genuine pairs were rejected. LFW pairs are single web photos taken at different times and places. The live app enrols with 2 averaged photos and compares them with a photo taken minutes later, which raises same-person scores, so fewer genuine visitors should be rejected in practice. That has not been measured yet, and the planned volunteer test should report it.
+
+**How 0.61 was chosen.** In a one-off leave-one-out check on the 432 LFW people with four or more photos, enrolling with 2 averaged photos at 0.61 accepted genuine people about as often as 3 photos did at 0.65 (about 88% and 87%). Across 86,400 different-person tries, none was accepted, and the highest impostor score was 0.49. This check is not one of the repository's scripts, so treat it as a development note rather than a published result.
+
 | Score distributions | ROC curve |
 |---|---|
 | ![Histogram of similarity scores for same-person and different-person pairs](reports/score_distributions.png) | ![ROC curve: true accept rate against false accept rate](reports/roc_curve.png) |
@@ -91,6 +114,8 @@ Huang, G. B., Ramesh, M., Berg, T., & Learned-Miller, E. (2007). *Labeled Faces 
 
 ## Limitations
 
+- **The live web app is not local-only.** Each photo travels to the hosting server and is compared there, in memory. The hosting provider's own systems are outside this project's control.
+- **The live app's 0.61 threshold is fairly strict.** Expect some genuine visitors to be rejected and to need a second try (see Results).
 - **No liveness detection.** A printed photo or a video of the person could fool it. It is a demonstration, not an anti-spoofing system.
 - A template is not anonymous: research shows embeddings can sometimes be partly reversed, so templates are treated as sensitive and encrypted.
 - The key is stored next to the data, which is acceptable for a demonstration. A real deployment would keep it in a key vault.
@@ -105,12 +130,15 @@ This is a technical demonstration, not legal advice. Anyone deploying face verif
 - **European Union:** the GDPR (General Data Protection Regulation) restricts processing biometric data to uniquely identify a person unless an exception applies, such as explicit consent.
 - **Illinois (USA):** the Biometric Information Privacy Act requires notice, a written release before collection, and a public retention and destruction policy.
 
+A public live demo means visitors from anywhere may submit their face. The consent box, the adults-only rule, memory-only handling and the **Delete my data** button reduce the risk but do not remove these legal duties, so get legal advice before promoting the live app widely.
+
 ## Roadmap
 
 - [x] Project setup, licence and environment check
 - [x] Encrypted template storage with expiry and deletion (covered by automated tests)
 - [x] Consent step and session-only mode (covered by automated tests)
 - [x] Live camera enrollment and verification, tested on the author's face
+- [x] Live web demo (Streamlit): button consent, name box, memory-only, threshold 0.61
 - [x] Accuracy evaluation on LFW
 - [x] Technical reference
 - [ ] Small consented test with volunteers (consent form in `docs/`)
