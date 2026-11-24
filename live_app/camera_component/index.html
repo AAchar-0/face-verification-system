@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { --text: #31333f; --primary: #ff4b4b; --panel: #f0f2f6; }
+  html, body { margin: 0; padding: 0; background: transparent; color: var(--text);
+               font-family: "Source Sans Pro", "Segoe UI", Arial, sans-serif; }
+  #wrap { display: flex; flex-direction: column; gap: 10px; padding: 2px; }
+  #stage { position: relative; width: 100%; aspect-ratio: 4 / 3; background: #000;
+           border-radius: 8px; overflow: hidden; }
+  video, #photo { width: 100%; height: 100%; object-fit: contain; display: block; background: #000; }
+  .mirror { transform: scaleX(-1); }              /* selfie preview looks like a mirror */
+  .hidden { display: none !important; }
+  #msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+         text-align: center; padding: 16px; color: #fff; font-size: 16px; background: rgba(0, 0, 0, 0.6); }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  button { flex: 1 1 160px; padding: 10px 12px; border-radius: 8px; font-size: 16px; cursor: pointer;
+           border: 1px solid rgba(128, 128, 128, 0.5); background: var(--panel); color: var(--text); }
+  button.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+  button:disabled { opacity: 0.5; cursor: default; }
+  #note { font-size: 14px; opacity: 0.85; min-height: 1em; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="stage">
+    <video id="video" autoplay playsinline muted></video>
+    <img id="photo" class="hidden" alt="Captured photo">
+    <div id="msg" class="hidden"></div>
+  </div>
+  <div id="note"></div>
+  <div class="row">
+    <button id="take" class="primary" type="button" disabled>Take photo</button>
+    <button id="switch" type="button" disabled>Switch to back camera</button>
+    <button id="retake" type="button" class="hidden">Retake photo</button>
+    <button id="retry" type="button" class="hidden">Try camera again</button>
+  </div>
+</div>
+
+<script>
+(function () {
+  var video = document.getElementById("video");
+  var photo = document.getElementById("photo");
+  var stage = document.getElementById("stage");
+  var msg = document.getElementById("msg");
+  var note = document.getElementById("note");
+  var takeBtn = document.getElementById("take");
+  var switchBtn = document.getElementById("switch");
+  var retakeBtn = document.getElementById("retake");
+  var retryBtn = document.getElementById("retry");
+  var wrap = document.getElementById("wrap");
+
+  video.muted = true;
+  video.setAttribute("playsinline", "");
+
+  var USER = "user";               // selfie camera (faces the person)
+  var BACK = "environment";        // back camera
+  var facing = USER;               // the camera that is wanted right now
+  var stream = null;
+  var started = false;             // true once the first render arrived
+  var busy = false;                // true while a camera is being opened
+
+  // ----- talking to Streamlit (the component protocol, no extra library needed) -----
+  function send(type, extra) {
+    var message = { isStreamlitMessage: true, type: type };
+    for (var key in extra) { message[key] = extra[key]; }
+    window.parent.postMessage(message, "*");
+  }
+  function setValue(value) { send("streamlit:setComponentValue", { value: value, dataType: "json" }); }
+  function setHeight() {
+    send("streamlit:setFrameHeight", { height: Math.ceil(wrap.getBoundingClientRect().height) + 6 });
+  }
+
+  // ----- small UI helpers -----
+  function showMessage(text) { msg.textContent = text; msg.classList.remove("hidden"); }
+  function hideMessage() { msg.classList.add("hidden"); }
+  function updateSwitchLabel() {
+    switchBtn.textContent = facing === USER ? "Switch to back camera" : "Switch to selfie camera";
+  }
+  function applyMirror() {
+    video.classList.toggle("mirror", facing === USER);
+    photo.classList.toggle("mirror", facing === USER);
+  }
+  function setLive(isLive) {                      // isLive: the camera is on and ready
+    takeBtn.disabled = !isLive;
+    switchBtn.disabled = !isLive;
+  }
+
+  function stopStream() {
+    if (stream) {
+      stream.getTracks().forEach(function (track) { track.stop(); });   // always free the camera
+      stream = null;
+    }
+    video.srcObject = null;
+  }
+
+  function describeError(error) {
+    var name = error && error.name;
+    if (name === "NotAllowedError" || name === "SecurityError") {
+      return "Camera permission was blocked. Allow camera access for this site in your browser, then tap Try camera again.";
+    }
+    if (name === "NotFoundError" || name === "OverconstrainedError") {
+      return "No camera was found on this device.";
+    }
+    if (name === "NotReadableError") {
+      return "The camera is being used by another app or tab. Close it, then tap Try camera again.";
+    }
+    return "The camera could not be started. Tap Try camera again.";
+  }
+
+  // Ask the browser for a camera. The selfie camera is requested as STRICTLY as possible first
+  // (exact), and only relaxed if the device cannot honour that (some laptop webcams do not report
+  // which way they face). The back camera is only ever requested exactly, so the label never lies.
+  async function openStream(wanted) {
+    var attempts = [{ video: { facingMode: { exact: wanted } }, audio: false }];
+    if (wanted === USER) {
+      attempts.push({ video: { facingMode: { ideal: USER } }, audio: false });
+      attempts.push({ video: true, audio: false });
+    }
+    var lastError = null;
+    for (var i = 0; i < attempts.length; i++) {
+      try {
+        return await navigator.mediaDevices.getUserMedia(attempts[i]);
+      } catch (error) {
+        lastError = error;
+        if (error && (error.name === "NotAllowedError" || error.name === "SecurityError")) { break; }
+      }
+    }
+    throw lastError;
+  }
+
+  async function startCamera(wanted, announce) {
+    if (busy) { return; }
+    busy = true;
+    stopStream();
+    setLive(false);
+    retryBtn.classList.add("hidden");
+    photo.classList.add("hidden");
+    video.classList.remove("hidden");
+    note.textContent = "";
+    showMessage("Starting the camera...");
+    setHeight();
+
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      showMessage("This page cannot use the camera. Open the app over a secure (https) link in a modern browser.");
+      busy = false;
+      return;
+    }
+
+    var opened = null;
+    var failure = null;
+    var fellBack = false;
+    try {
+      opened = await openStream(wanted);
+    } catch (error) {
+      failure = error;
+    }
+    if (!opened && wanted === BACK && !(failure && failure.name === "NotAllowedError")) {
+      try {                                        // no back camera: go back to the selfie camera
+        opened = await openStream(USER);
+        wanted = USER;
+        fellBack = true;
+      } catch (error) {
+        failure = error;
+      }
+    }
+
+    if (!opened) {
+      showMessage(describeError(failure));
+      retryBtn.classList.remove("hidden");
+      busy = false;
+      setHeight();
+      return;
+    }
+
+    stream = opened;
+    facing = wanted;
+    video.srcObject = stream;
+    applyMirror();
+    updateSwitchLabel();
+    try { await video.play(); } catch (ignored) { /* autoplay is already on */ }
+    hideMessage();
+    setLive(true);
+    note.textContent = fellBack ? "No back camera could be opened on this device, so the selfie camera is on." : "";
+    if (announce || fellBack) { setValue({ image: null, facing: facing }); }   // tell the app which camera is in use
+    busy = false;
+    setHeight();
+  }
+
+  // ----- buttons -----
+  takeBtn.addEventListener("click", function () {
+    if (!stream || !video.videoWidth) { return; }
+    var canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+    var dataUrl = canvas.toDataURL("image/jpeg", 0.92);
+    photo.src = dataUrl;
+    applyMirror();
+    video.classList.add("hidden");
+    photo.classList.remove("hidden");
+    stopStream();                                   // the camera switches off once the photo is taken
+    setLive(false);
+    takeBtn.classList.add("hidden");
+    switchBtn.classList.add("hidden");
+    retakeBtn.classList.remove("hidden");
+    setValue({ image: dataUrl, facing: facing });
+    setHeight();
+  });
+
+  retakeBtn.addEventListener("click", function () {
+    retakeBtn.classList.add("hidden");
+    takeBtn.classList.remove("hidden");
+    switchBtn.classList.remove("hidden");
+    setValue({ image: null, facing: facing });
+    startCamera(facing, false);
+  });
+
+  switchBtn.addEventListener("click", function () {
+    startCamera(facing === USER ? BACK : USER, true);
+  });
+
+  retryBtn.addEventListener("click", function () { startCamera(facing, false); });
+
+  window.addEventListener("pagehide", stopStream);
+  if (window.ResizeObserver) { new ResizeObserver(setHeight).observe(wrap); }
+
+  // ----- messages from Streamlit -----
+  function applyTheme(theme) {
+    if (!theme) { return; }
+    var root = document.documentElement.style;
+    if (theme.textColor) { root.setProperty("--text", theme.textColor); }
+    if (theme.primaryColor) { root.setProperty("--primary", theme.primaryColor); }
+    if (theme.secondaryBackgroundColor) { root.setProperty("--panel", theme.secondaryBackgroundColor); }
+  }
+
+  window.addEventListener("message", function (event) {
+    var data = event.data;
+    if (!data || data.type !== "streamlit:render") { return; }
+    applyTheme(data.theme);
+    if (started) { return; }                        // later renders never change the camera
+    started = true;
+    var args = data.args || {};
+    // The selfie camera is the default every time the page loads. Only a camera the person chose
+    // earlier in this same visit (after the page loaded) is passed in as "back".
+    startCamera(args.facing === BACK ? BACK : USER, false);
+  });
+
+  send("streamlit:componentReady", { apiVersion: 1 });
+  setHeight();
+})();
+</script>
+</body>
+</html>

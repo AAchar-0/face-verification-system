@@ -21,6 +21,7 @@ Privacy rules built into the code:
     - Unlike the command-line version, a hosted app MUST receive the photo on its server to compare it.
       The consent text says so plainly.
 """
+import base64
 import hashlib
 import sys
 import tempfile
@@ -34,6 +35,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 import streamlit as st
+import streamlit.components.v1 as components
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SRC_DIR = PROJECT_ROOT / "src"
@@ -181,6 +183,43 @@ def analyse_once(photo):
     return embedding, problem
 
 
+# ---------- Camera (selfie camera first, with a switch button) ----------
+# st.camera_input cannot choose which camera opens, so a small component in live_app/camera_component/
+# draws the camera instead. It always opens the SELFIE camera when the page loads, and a button switches
+# between the selfie camera and the back camera. The photo still stays in memory only.
+_CAMERA_COMPONENT = components.declare_component(
+    "selfie_camera", path=str(Path(__file__).resolve().parent / "camera_component"))
+
+
+class CapturedPhoto:
+    """Looks like the photo st.camera_input returned: the rest of the app only calls getvalue()."""
+
+    def __init__(self, data: bytes):
+        self._data = data
+
+    def getvalue(self) -> bytes:
+        return self._data
+
+
+def camera_photo(key: str):
+    """Show the camera and return a CapturedPhoto once a photo is taken, otherwise None."""
+    facing_key = f"{key}_start_facing"
+    if facing_key not in st.session_state:                     # fixed per widget, so the camera is not reopened
+        st.session_state[facing_key] = st.session_state.get("camera_facing", "user")
+    value = _CAMERA_COMPONENT(facing=st.session_state[facing_key], key=key, default=None)
+    if not isinstance(value, dict):
+        return None
+    if value.get("facing") in ("user", "environment"):
+        st.session_state["camera_facing"] = value["facing"]    # the next photo opens the same camera
+    image = value.get("image")
+    if not image or "," not in image:
+        return None
+    try:
+        return CapturedPhoto(base64.b64decode(image.split(",", 1)[1]))
+    except ValueError:
+        return None
+
+
 # ---------- Session handling ----------
 def fresh_state() -> dict:
     return {"stage": "welcome", "name": "", "consent_version": None, "consent_at": None,
@@ -245,10 +284,9 @@ def screen_enroll() -> None:
     done = len(st.session_state["embeddings"])
     st.subheader(f"Hi {name}")
     st.progress(done / ENROLL_PHOTOS, text=f"Enrolment: photo {done + 1} of {ENROLL_PHOTOS}")
-    st.write("Look straight at the camera in good light, then tap the camera button to take the photo.")
+    st.write("Look straight at the camera in good light, then tap Take photo. The selfie camera opens first; tap Switch to back camera if you prefer.")
 
-    photo = st.camera_input("Enrolment photo", key=f"enroll_cam_{st.session_state['shot']}",
-                            label_visibility="collapsed")
+    photo = camera_photo(f"enroll_cam_{st.session_state['shot']}")
     if photo is not None:
         embedding, problem = analyse_once(photo)
         if problem:
@@ -273,8 +311,7 @@ def screen_verify() -> None:
     st.subheader(f"You are enrolled, {name}")
     st.write("Now take one more photo, to check that the app recognises you.")
 
-    photo = st.camera_input("Verification photo", key=f"verify_cam_{st.session_state['attempt']}",
-                            label_visibility="collapsed")
+    photo = camera_photo(f"verify_cam_{st.session_state['attempt']}")
     if photo is not None:
         embedding, problem = analyse_once(photo)
         if problem:
